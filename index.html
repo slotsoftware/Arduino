@@ -81,6 +81,12 @@
                     <span class="hidden sm:inline">Descargar App (.HTML)</span>
                 </button>
 
+                <!-- Botón Desbloquear / Reiniciar Puerto -->
+                <button onclick="forceReleasePort()" class="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-rose-400 border border-rose-500/30 text-xs font-bold transition" title="Liberar puerto si se quedó colgado en otra pestaña">
+                    <i class="ph-bold ph-plugs text-base"></i>
+                    <span class="hidden md:inline">Liberar Puerto</span>
+                </button>
+
                 <!-- Botón Sonido -->
                 <button id="btnAudio" onclick="toggleAudio()" class="p-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700 transition" title="Sonidos de paso por sensor">
                     <i id="iconAudio" class="ph-fill ph-speaker-high text-lg text-amber-400"></i>
@@ -114,6 +120,22 @@
             </div>
 
             <div class="space-y-4 text-xs sm:text-sm text-slate-300">
+                <!-- Causa CRÍTICA: No se puede abrir el puerto -->
+                <div class="p-4 rounded-xl bg-rose-950/50 border-2 border-rose-600/60">
+                    <div class="font-extrabold text-rose-300 flex items-center justify-between mb-1.5">
+                        <span class="flex items-center gap-1.5"><i class="ph-fill ph-warning-octagon text-lg text-rose-400"></i> ¿Te sale "No se puede abrir el puerto" (Failed to open serial port)?</span>
+                        <span class="text-[11px] px-2 py-0.5 rounded bg-rose-500/30 text-rose-200 font-mono">SOLUCIÓN RÁPIDA</span>
+                    </div>
+                    <p class="text-xs text-slate-200 leading-relaxed mb-2">
+                        Ese mensaje significa que <strong>Chrome SÍ ve tu Elegoo UNO R3</strong>, pero Windows tiene el puerto <code>COM</code> bloqueado porque otro programa lo está usando ahora mismo. Haz estos 3 pasos en orden:
+                    </p>
+                    <ol class="list-decimal list-inside text-xs text-slate-200 space-y-1.5 bg-slate-950/90 p-3 rounded-lg border border-rose-800/50">
+                        <li><strong>Cierra por completo el programa Arduino IDE</strong> (aunque no tengas el Monitor Serie abierto, el Arduino IDE 2.x bloquea el puerto en segundo plano).</li>
+                        <li><strong>Cierra otras pestañas de Chrome</strong> donde hayas intentado abrir KRONOS antes (solo una pestaña puede usar el USB a la vez).</li>
+                        <li><strong>Desenchufa el cable USB azul de tu Elegoo, espera 3 segundos y vuélvelo a enchufar.</strong> Luego pulsa <em>"Conectar Arduino USB"</em>.</li>
+                    </ol>
+                </div>
+
                 <!-- Causa 1: Iframe Sandbox -->
                 <div class="p-3.5 rounded-xl bg-cyan-950/40 border border-cyan-800/60">
                     <div class="font-bold text-cyan-300 flex items-center justify-between mb-1">
@@ -538,54 +560,91 @@
                 return;
             }
 
+            // Si había una instancia previa medio abierta o bloqueada en esta pestaña, la cerramos primero
+            if (port) {
+                await disconnectSerial();
+            }
+
             try {
-                // IMPORTANTE: No pasamos filtros restrictivos de usbVendorId para que Chrome muestre
-                // TODAS las placas compatibles (Elegoo ATmega16U2, chips CH340, CP210x, FTDI y puertos COM genéricos)
+                // Mostrar lista de puertos compatibles
                 port = await navigator.serial.requestPort({});
 
                 const portInfo = port.getInfo ? port.getInfo() : {};
                 if (portInfo.usbVendorId) {
-                    logToConsole(`Dispositivo USB detectado (VID: 0x${portInfo.usbVendorId.toString(16).toUpperCase()}, PID: 0x${(portInfo.usbProductId || 0).toString(16).toUpperCase()})`, "SYSTEM");
+                    logToConsole(`Placa seleccionada (VID: 0x${portInfo.usbVendorId.toString(16).toUpperCase()}, PID: 0x${(portInfo.usbProductId || 0).toString(16).toUpperCase()})`, "SYSTEM");
                 }
 
-                // Tu código de Arduino usa Serial.begin(115200)
-                await port.open({ baudRate: 115200 });
-
-                // En placas UNO R3 / Elegoo R3, activar DTR reinicia el microcontrolador limpiamente y lanza el setup()
+                // Intentar abrir a 115200 baudios con reintento automático si Windows tarda en liberar el driver
                 try {
-                    await port.setSignals({ dataTerminalReady: true, requestToSend: true });
+                    await port.open({ baudRate: 115200, bufferSize: 4096 });
+                } catch (openErr) {
+                    logToConsole("Primer intento ocupado, liberando y reintentando en 400ms...", "SYSTEM");
+                    try { await port.close(); } catch (_) {}
+                    await new Promise(r => setTimeout(r, 400));
+                    await port.open({ baudRate: 115200 });
+                }
+
+                // Señal opcional DTR/RTS (envuelta para no fallar en chips CH340/Elegoo)
+                try {
+                    await port.setSignals({ dataTerminalReady: true, requestToSend: false });
                 } catch (sigErr) {
-                    // Algunos adaptadores USB-Serie no requieren control manual de DTR
+                    logToConsole("Modo serie directo activado (sin DTR forzado).", "SYSTEM");
                 }
 
                 isConnected = true;
                 readLoopActive = true;
                 updateConnectionUI(true);
                 hideBanner();
-                logToConsole("Conectado al puerto USB a 115200 baudios. Esperando autocalibración de Elegoo...", "SYSTEM");
-
-                // Preparar canal de escritura para enviar PING, TEST o CAL
-                const textEncoder = new TextEncoderStream();
-                const writableStreamClosed = textEncoder.readable.pipeTo(port.writable);
-                writer = textEncoder.writable.getWriter();
+                logToConsole("¡CONECTADO! Puerto serie abierto a 115200 baudios.", "SYSTEM");
 
                 // Iniciar bucle de lectura continua
                 readSerialLoop();
 
+                // Pedir estado inicial a la placa tras 1.5s (por si el Elegoo se reinició al abrir el puerto)
+                setTimeout(() => {
+                    if (isConnected) sendCommand("PING");
+                }, 1600);
+
             } catch (err) {
-                logToConsole("Aviso al abrir puerto USB: " + err.message, "ERROR");
+                logToConsole("Error al abrir puerto USB: " + err.message, "ERROR");
+                port = null;
+                isConnected = false;
+                updateConnectionUI(false);
+
+                const msgLower = (err.message || "").toLowerCase();
                 if (err.name === "NotFoundError") {
-                    showBanner("Cerraste la ventana sin elegir puerto o tu Elegoo R3 no aparecía en la lista. Pulsa en '¿No sale tu Elegoo?' arriba a la derecha para solucionarlo.");
+                    showBanner("Cerraste la ventana sin seleccionar el puerto COM. Vuelve a pulsar 'Conectar Arduino USB' y haz clic sobre tu puerto COM antes de darle a Conectar.");
+                } else if (err.name === "NetworkError" || msgLower.includes("failed to open") || msgLower.includes("abierto") || msgLower.includes("open")) {
+                    showBanner("BLOQUEO DE PUERTO COM: Windows no deja abrir el puerto porque otro programa (como Arduino IDE, Cura o una pestaña anterior) lo tiene ocupado. Cierra Arduino IDE por completo, desenchufa el USB 3 segundos, vuélvelo a enchufar y prueba otra vez.");
                     openUsbHelpModal();
-                } else if (err.name === "SecurityError" || err.message.includes("permissions policy")) {
-                    showBanner("La vista previa está bloqueando el acceso al USB. Pulsa el botón azul 'Descargar App (.HTML)' arriba y ábrelo con doble clic en Chrome.");
-                    openUsbHelpModal();
-                } else if (err.name === "NetworkError" || err.message.includes("Failed to open serial port")) {
-                    showBanner("El puerto COM está ocupado por otro programa. Cierra el Monitor Serie del Arduino IDE y vuelve a intentarlo.");
+                } else if (err.name === "InvalidStateError") {
+                    showBanner("El puerto ya estaba abierto en esta pestaña. Pulsa el botón 'Liberar Puerto' arriba y vuelve a conectar.");
                 } else {
-                    showBanner("No se pudo conectar al puerto USB (" + err.message + "). Pulsa en '¿No sale tu Elegoo?' para ver la guía rápida.");
+                    showBanner("No se pudo abrir el puerto (" + err.message + "). Revisa los 3 pasos en la ventana de ayuda.");
+                    openUsbHelpModal();
                 }
             }
+        }
+
+        // Función para forzar el cierre de todos los puertos que se hayan quedado enganchados en el navegador
+        async function forceReleasePort() {
+            logToConsole("Liberando todos los puertos USB en esta sesión...", "SYSTEM");
+            await disconnectSerial();
+            if ('serial' in navigator) {
+                try {
+                    const ports = await navigator.serial.getPorts();
+                    for (const p of ports) {
+                        try {
+                            if (p.readable && p.readable.locked) {
+                                // Intentar cancelar lectores activos
+                            }
+                            await p.close();
+                        } catch (_) {}
+                    }
+                } catch (_) {}
+            }
+            showBanner("Puertos de la sesión liberados. Si tenías el Arduino IDE abierto, ciérralo, desenchufa y vuelve a enchufar el cable USB de la Elegoo y pulsa 'Conectar Arduino USB'.");
+            logToConsole("Puertos liberados. Ya puedes intentar conectar de nuevo.", "SYSTEM");
         }
 
         // ==========================================
@@ -647,37 +706,37 @@
             readLoopActive = false;
             try {
                 if (reader) {
-                    await reader.cancel();
+                    try { await reader.cancel(); } catch (_) {}
+                    try { reader.releaseLock(); } catch (_) {}
                     reader = null;
                 }
                 if (writer) {
-                    await writer.close();
+                    try { await writer.close(); } catch (_) {}
+                    try { writer.releaseLock(); } catch (_) {}
                     writer = null;
                 }
                 if (port) {
-                    await port.close();
+                    try { await port.close(); } catch (_) {}
                     port = null;
                 }
             } catch (e) {
-                console.warn("Error cerrando puerto:", e);
+                console.warn("Aviso cerrando puerto:", e);
             }
             isConnected = false;
             updateConnectionUI(false);
-            logToConsole("Puerto USB desconectado.", "SYSTEM");
+            logToConsole("Puerto USB desconectado y liberado.", "SYSTEM");
         }
 
         async function readSerialLoop() {
+            const decoder = new TextDecoder();
             while (port && port.readable && readLoopActive) {
-                const textDecoder = new TextDecoderStream();
-                const readableStreamClosed = port.readable.pipeTo(textDecoder.writable);
-                reader = textDecoder.readable.getReader();
-
                 try {
-                    while (true) {
+                    reader = port.readable.getReader();
+                    while (readLoopActive) {
                         const { value, done } = await reader.read();
                         if (done) break;
                         if (value) {
-                            serialBuffer += value;
+                            serialBuffer += decoder.decode(value, { stream: true });
                             let lines = serialBuffer.split(/\r?\n/);
                             serialBuffer = lines.pop(); // Guardar fragmento incompleto
                             for (const line of lines) {
@@ -689,10 +748,14 @@
                         }
                     }
                 } catch (err) {
-                    logToConsole("Error de lectura USB: " + err.message, "ERROR");
+                    if (readLoopActive) {
+                        logToConsole("Aviso lectura USB: " + err.message, "ERROR");
+                    }
+                    break;
                 } finally {
                     if (reader) {
-                        reader.releaseLock();
+                        try { reader.releaseLock(); } catch (_) {}
+                        reader = null;
                     }
                 }
             }
@@ -993,9 +1056,12 @@
 
             logToConsole(cleanCmd, "TX");
 
-            if (isConnected && writer) {
+            if (isConnected && port && port.writable) {
                 try {
-                    await writer.write(cleanCmd + "\n");
+                    const encoder = new TextEncoder();
+                    const tempWriter = port.writable.getWriter();
+                    await tempWriter.write(encoder.encode(cleanCmd + "\n"));
+                    tempWriter.releaseLock();
                 } catch (e) {
                     logToConsole("Error al enviar comando: " + e.message, "ERROR");
                 }
