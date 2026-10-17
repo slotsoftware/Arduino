@@ -1,0 +1,1008 @@
+<!DOCTYPE html>
+<html lang="es" class="dark">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>KRONOS SLOT PRO - Telemetría IR v4</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://unpkg.com/@phosphor-icons/web"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@500;700;800&display=swap" rel="stylesheet">
+    <style>
+        body {
+            font-family: 'Inter', sans-serif;
+            background-color: #0b0f19;
+            color: #f1f5f9;
+        }
+        .font-mono-timer {
+            font-family: 'JetBrains Mono', monospace;
+            font-variant-numeric: tabular-nums;
+        }
+        /* Animación de pulso para cuando pasa un coche */
+        @keyframes flashSector {
+            0% { transform: scale(1.03); filter: brightness(1.5); }
+            100% { transform: scale(1); filter: brightness(1); }
+        }
+        .sector-flash {
+            animation: flashSector 0.35s ease-out;
+        }
+        /* Scrollbar personalizada */
+        ::-webkit-scrollbar {
+            width: 8px;
+            height: 8px;
+        }
+        ::-webkit-scrollbar-track {
+            background: #111827;
+        }
+        ::-webkit-scrollbar-thumb {
+            background: #374151;
+            border-radius: 4px;
+        }
+        ::-webkit-scrollbar-thumb:hover {
+            background: #4b5563;
+        }
+    </style>
+</head>
+<body class="min-h-screen flex flex-col justify-between selection:bg-amber-500 selection:text-black">
+
+    <!-- HEADER / BARRA DE CONEXIÓN -->
+    <header class="border-b border-slate-800 bg-slate-900/80 backdrop-blur-md sticky top-0 z-30">
+        <div class="max-w-7xl mx-auto px-4 sm:px-6 py-3 flex flex-wrap items-center justify-between gap-4">
+            <!-- Logo y Título -->
+            <div class="flex items-center gap-3">
+                <div class="w-10 h-10 rounded-xl bg-gradient-to-br from-amber-500 to-red-600 flex items-center justify-center shadow-lg shadow-amber-500/20">
+                    <i class="ph-fill ph-flag-checkered text-2xl text-white"></i>
+                </div>
+                <div>
+                    <div class="flex items-center gap-2">
+                        <h1 class="font-extrabold text-lg tracking-wider text-white">KRONOS <span class="text-amber-500">SLOT PRO</span></h1>
+                        <span class="text-xs px-2 py-0.5 rounded-full bg-slate-800 text-slate-300 border border-slate-700 font-mono">IR v4</span>
+                    </div>
+                    <p class="text-xs text-slate-400">Sistema de Cronometraje 1 Carril (Rally / Test) • 115200 bps</p>
+                </div>
+            </div>
+
+            <!-- Estado de Conexión y Controles Principales -->
+            <div class="flex items-center flex-wrap gap-2 sm:gap-3">
+                <!-- Indicador Heartbeat -->
+                <div id="heartbeatBadge" class="flex items-center gap-2 px-3 py-1.5 rounded-xl bg-slate-950 border border-slate-800 text-xs">
+                    <span id="statusDot" class="w-2.5 h-2.5 rounded-full bg-red-500"></span>
+                    <span id="statusText" class="font-semibold text-slate-300">Desconectado</span>
+                </div>
+
+                <!-- Botón Sonido -->
+                <button id="btnAudio" onclick="toggleAudio()" class="p-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700 transition" title="Sonidos de paso por sensor">
+                    <i id="iconAudio" class="ph-fill ph-speaker-high text-lg text-amber-400"></i>
+                </button>
+
+                <!-- Botón Conectar USB Real -->
+                <button id="btnConnect" onclick="toggleSerialConnection()" class="flex items-center gap-2 px-4 py-2 rounded-xl font-bold text-sm bg-emerald-600 hover:bg-emerald-500 text-white shadow-lg shadow-emerald-600/20 transition cursor-pointer">
+                    <i class="ph-bold ph-usb text-lg"></i>
+                    <span id="btnConnectText">Conectar Arduino USB</span>
+                </button>
+            </div>
+        </div>
+    </header>
+
+    <!-- CONTENIDO PRINCIPAL -->
+    <main class="max-w-7xl w-full mx-auto px-4 sm:px-6 py-6 flex-1 flex flex-col gap-6">
+
+        <!-- Aviso de compatibilidad o instrucciones si es necesario -->
+        <div id="alertBanner" class="hidden rounded-xl p-4 bg-amber-500/10 border border-amber-500/30 text-amber-200 text-sm flex items-center justify-between gap-3">
+            <div class="flex items-center gap-3">
+                <i class="ph-fill ph-warning-circle text-2xl text-amber-400 shrink-0"></i>
+                <span id="alertBannerText">Mensaje del sistema</span>
+            </div>
+            <button onclick="hideBanner()" class="text-xs px-2.5 py-1 rounded-lg bg-amber-500/20 hover:bg-amber-500/30 font-semibold">Cerrar</button>
+        </div>
+
+        <!-- FILA SUPERIOR: HARDWARE EN VIVO + CRONÓMETRO CENTRAL -->
+        <div class="grid grid-cols-1 lg:grid-cols-12 gap-6">
+            
+            <!-- PANEL IZQUIERDO: ESTADO ELÉCTRICO DE LOS SENSORES Y DIAGNÓSTICO (4 cols) -->
+            <div class="lg:col-span-4 bg-slate-900 border border-slate-800 rounded-2xl p-5 flex flex-col justify-between gap-5 shadow-xl">
+                <div>
+                    <div class="flex items-center justify-between mb-4">
+                        <h2 class="text-sm font-bold uppercase tracking-wider text-slate-400 flex items-center gap-2">
+                            <i class="ph-bold ph-cpu text-amber-500 text-lg"></i>
+                            Estado Pines IR (Tiempo Real)
+                        </h2>
+                        <span id="lastHeartbeatTime" class="text-xs font-mono text-slate-500">Sin latido</span>
+                    </div>
+
+                    <!-- Los 3 Sensores Físicos -->
+                    <div class="grid grid-cols-3 gap-3">
+                        <!-- Pin 2: S1 -->
+                        <div id="pinCardS1" class="bg-slate-950 border border-slate-800 rounded-xl p-3 flex flex-col items-center text-center transition-all">
+                            <span class="text-[11px] font-mono text-slate-400">PIN 2</span>
+                            <span class="font-bold text-sm text-cyan-400 mt-0.5">SECTOR 1</span>
+                            <div id="pinLightS1" class="w-4 h-4 rounded-full bg-slate-700 my-2.5 shadow-inner transition-all"></div>
+                            <span id="pinValS1" class="font-mono-timer text-xs px-2 py-0.5 rounded bg-slate-900 text-slate-400 border border-slate-800">--</span>
+                        </div>
+
+                        <!-- Pin 3: S2 -->
+                        <div id="pinCardS2" class="bg-slate-950 border border-slate-800 rounded-xl p-3 flex flex-col items-center text-center transition-all">
+                            <span class="text-[11px] font-mono text-slate-400">PIN 3</span>
+                            <span class="font-bold text-sm text-purple-400 mt-0.5">SECTOR 2</span>
+                            <div id="pinLightS2" class="w-4 h-4 rounded-full bg-slate-700 my-2.5 shadow-inner transition-all"></div>
+                            <span id="pinValS2" class="font-mono-timer text-xs px-2 py-0.5 rounded bg-slate-900 text-slate-400 border border-slate-800">--</span>
+                        </div>
+
+                        <!-- Pin 4: META -->
+                        <div id="pinCardMeta" class="bg-slate-950 border border-slate-800 rounded-xl p-3 flex flex-col items-center text-center transition-all">
+                            <span class="text-[11px] font-mono text-slate-400">PIN 4</span>
+                            <span class="font-bold text-sm text-emerald-400 mt-0.5">META (S3)</span>
+                            <div id="pinLightMeta" class="w-4 h-4 rounded-full bg-slate-700 my-2.5 shadow-inner transition-all"></div>
+                            <span id="pinValMeta" class="font-mono-timer text-xs px-2 py-0.5 rounded bg-slate-900 text-slate-400 border border-slate-800">--</span>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Botones de Comandos Bidireccionales al Arduino -->
+                <div class="border-t border-slate-800 pt-4">
+                    <span class="text-xs font-semibold text-slate-400 block mb-2.5">Comandos USB hacia Arduino:</span>
+                    <div class="grid grid-cols-2 gap-2.5">
+                        <button onclick="sendCommand('PING')" class="flex items-center justify-center gap-2 py-2.5 px-3 rounded-xl bg-slate-800 hover:bg-slate-700 active:scale-95 text-xs font-bold text-slate-200 border border-slate-700 transition">
+                            <i class="ph-bold ph-broadcast text-cyan-400 text-base"></i>
+                            TEST / PING
+                        </button>
+                        <button onclick="sendCommand('CAL')" class="flex items-center justify-center gap-2 py-2.5 px-3 rounded-xl bg-slate-800 hover:bg-slate-700 active:scale-95 text-xs font-bold text-slate-200 border border-slate-700 transition">
+                            <i class="ph-bold ph-crosshair text-amber-400 text-base"></i>
+                            RECALIBRAR (CAL)
+                        </button>
+                    </div>
+                </div>
+
+                <!-- Simulador Manual (Para probar sin Arduino o en el escritorio) -->
+                <div class="border-t border-slate-800 pt-4 bg-slate-950/60 -mx-5 -mb-5 p-4 rounded-b-2xl">
+                    <div class="flex items-center justify-between mb-2">
+                        <span class="text-xs font-bold text-amber-400 flex items-center gap-1.5">
+                            <i class="ph-fill ph-game-controller"></i> Modo Simulador / Test Manual
+                        </span>
+                        <button id="btnAutoSim" onclick="toggleAutoRallySim()" class="text-[11px] px-2.5 py-1 rounded-lg bg-amber-500/20 hover:bg-amber-500/30 text-amber-300 border border-amber-500/30 font-semibold transition">
+                            ▶ Simular Vuelta Auto
+                        </button>
+                    </div>
+                    <div class="grid grid-cols-3 gap-2">
+                        <button onclick="simulatePass('S1')" class="py-1.5 px-2 rounded-lg bg-cyan-950/70 hover:bg-cyan-900/80 border border-cyan-700/50 text-cyan-300 text-xs font-bold transition active:scale-95">
+                            Cortar S1
+                        </button>
+                        <button onclick="simulatePass('S2')" class="py-1.5 px-2 rounded-lg bg-purple-950/70 hover:bg-purple-900/80 border border-purple-700/50 text-purple-300 text-xs font-bold transition active:scale-95">
+                            Cortar S2
+                        </button>
+                        <button onclick="simulatePass('M')" class="py-1.5 px-2 rounded-lg bg-emerald-950/70 hover:bg-emerald-900/80 border border-emerald-700/50 text-emerald-300 text-xs font-bold transition active:scale-95">
+                            Cortar META
+                        </button>
+                    </div>
+                </div>
+            </div>
+
+            <!-- PANEL DERECHO: TELEMETRÍA DE VUELTA Y SECTORES (8 cols) -->
+            <div class="lg:col-span-8 bg-slate-900 border border-slate-800 rounded-2xl p-6 flex flex-col justify-between gap-6 shadow-xl relative overflow-hidden">
+                
+                <!-- Cabecera del Crono -->
+                <div class="flex flex-wrap items-center justify-between gap-4 border-b border-slate-800 pb-4">
+                    <div>
+                        <span class="text-xs uppercase font-bold tracking-widest text-amber-500 block">CARRIL 1 (L1) • TRAMO ACTIVO</span>
+                        <h2 id="currentStageStatus" class="text-lg font-bold text-slate-200 mt-0.5">Esperando paso por sensor...</h2>
+                    </div>
+
+                    <div class="flex items-center gap-4">
+                        <div class="text-right">
+                            <span class="text-xs text-slate-400 block">Vueltas Completadas</span>
+                            <span id="lapCountDisplay" class="font-mono-timer text-2xl font-extrabold text-white">0</span>
+                        </div>
+                        <button onclick="resetTelemetry()" class="px-3 py-2 rounded-xl bg-slate-800 hover:bg-red-950/80 hover:text-red-300 hover:border-red-800 text-slate-300 border border-slate-700 text-xs font-semibold flex items-center gap-1.5 transition" title="Reiniciar tabla de tiempos">
+                            <i class="ph-bold ph-trash"></i> Reiniciar Sesión
+                        </button>
+                    </div>
+                </div>
+
+                <!-- Gran Pantalla de Última Vuelta vs Mejor Vuelta -->
+                <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <!-- Tiempo de Vuelta Actual / Última -->
+                    <div id="lastLapBox" class="bg-slate-950 border border-slate-800 rounded-2xl p-5 flex flex-col justify-between">
+                        <div class="flex items-center justify-between">
+                            <span class="text-xs font-bold uppercase tracking-wider text-slate-400">Última Vuelta / Acumulado</span>
+                            <span id="lapDeltaBadge" class="text-xs font-mono-timer px-2 py-0.5 rounded bg-slate-800 text-slate-400">--</span>
+                        </div>
+                        <div id="mainLapTimer" class="font-mono-timer text-4xl sm:text-5xl font-extrabold text-white my-2 tracking-tight">
+                            0.000<span class="text-xl text-slate-500 font-normal">s</span>
+                        </div>
+                        <div class="text-xs text-slate-400 flex items-center justify-between">
+                            <span>Suma S1 + S2 + Meta</span>
+                            <span id="lastRawSplitInfo" class="font-mono text-amber-400">Último sensor: --</span>
+                        </div>
+                    </div>
+
+                    <!-- Récord de Vuelta y Vuelta Óptima -->
+                    <div class="bg-gradient-to-br from-purple-950/40 to-slate-950 border border-purple-800/40 rounded-2xl p-5 flex flex-col justify-between">
+                        <div class="flex items-center justify-between">
+                            <span class="text-xs font-bold uppercase tracking-wider text-purple-300 flex items-center gap-1.5">
+                                <i class="ph-fill ph-trophy text-amber-400"></i> Mejor Vuelta (Récord)
+                            </span>
+                            <span id="bestLapNumBadge" class="text-xs font-mono px-2 py-0.5 rounded bg-purple-900/50 text-purple-200 border border-purple-700/50">Sin récord</span>
+                        </div>
+                        <div id="bestLapTimer" class="font-mono-timer text-4xl sm:text-5xl font-extrabold text-purple-300 my-2 tracking-tight">
+                            --.---<span class="text-xl text-purple-500/70 font-normal">s</span>
+                        </div>
+                        <div class="text-xs text-slate-400 flex items-center justify-between border-t border-purple-900/40 pt-2">
+                            <span>Vuelta Teórica Ideal (Mejores Sectores):</span>
+                            <span id="theoreticalBestDisplay" class="font-mono-timer font-bold text-emerald-400">--.---s</span>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Tarjetas de los 3 Sectores (S1, S2, META) -->
+                <div class="grid grid-cols-1 sm:grid-cols-3 gap-4">
+                    <!-- SECTOR 1 -->
+                    <div id="cardSector1" class="bg-slate-950 border-2 border-slate-800 rounded-2xl p-4 transition-all">
+                        <div class="flex items-center justify-between mb-1">
+                            <span class="text-xs font-extrabold uppercase tracking-wider text-cyan-400">SECTOR 1 (Pin 2)</span>
+                            <span class="text-[11px] font-mono text-slate-500">S1,L1</span>
+                        </div>
+                        <div id="timeS1" class="font-mono-timer text-3xl font-extrabold text-white my-1">
+                            --.---<span class="text-sm text-slate-500">s</span>
+                        </div>
+                        <div class="flex items-center justify-between text-xs text-slate-400 mt-2 pt-2 border-t border-slate-900">
+                            <span>Mejor S1:</span>
+                            <span id="bestS1" class="font-mono-timer font-semibold text-cyan-300">--.---s</span>
+                        </div>
+                    </div>
+
+                    <!-- SECTOR 2 -->
+                    <div id="cardSector2" class="bg-slate-950 border-2 border-slate-800 rounded-2xl p-4 transition-all">
+                        <div class="flex items-center justify-between mb-1">
+                            <span class="text-xs font-extrabold uppercase tracking-wider text-purple-400">SECTOR 2 (Pin 3)</span>
+                            <span class="text-[11px] font-mono text-slate-500">S2,L1</span>
+                        </div>
+                        <div id="timeS2" class="font-mono-timer text-3xl font-extrabold text-white my-1">
+                            --.---<span class="text-sm text-slate-500">s</span>
+                        </div>
+                        <div class="flex items-center justify-between text-xs text-slate-400 mt-2 pt-2 border-t border-slate-900">
+                            <span>Mejor S2:</span>
+                            <span id="bestS2" class="font-mono-timer font-semibold text-purple-300">--.---s</span>
+                        </div>
+                    </div>
+
+                    <!-- SECTOR 3 / META -->
+                    <div id="cardSector3" class="bg-slate-950 border-2 border-slate-800 rounded-2xl p-4 transition-all">
+                        <div class="flex items-center justify-between mb-1">
+                            <span class="text-xs font-extrabold uppercase tracking-wider text-emerald-400">META / S3 (Pin 4)</span>
+                            <span class="text-[11px] font-mono text-slate-500">M,L1</span>
+                        </div>
+                        <div id="timeS3" class="font-mono-timer text-3xl font-extrabold text-white my-1">
+                            --.---<span class="text-sm text-slate-500">s</span>
+                        </div>
+                        <div class="flex items-center justify-between text-xs text-slate-400 mt-2 pt-2 border-t border-slate-900">
+                            <span>Mejor S3:</span>
+                            <span id="bestS3" class="font-mono-timer font-semibold text-emerald-300">--.---s</span>
+                        </div>
+                    </div>
+                </div>
+
+            </div>
+        </div>
+
+        <!-- FILA INFERIOR: HISTORIAL DE VUELTAS + CONSOLA MONITOR SERIE -->
+        <div class="grid grid-cols-1 lg:grid-cols-12 gap-6">
+            
+            <!-- TABLA DE VUELTAS (7 cols) -->
+            <div class="lg:col-span-7 bg-slate-900 border border-slate-800 rounded-2xl p-5 flex flex-col shadow-xl">
+                <div class="flex items-center justify-between mb-4">
+                    <h3 class="text-sm font-bold uppercase tracking-wider text-slate-300 flex items-center gap-2">
+                        <i class="ph-bold ph-list-numbers text-amber-500 text-lg"></i>
+                        Historial de Vueltas y Parciales
+                    </h3>
+                    <button onclick="exportCSV()" class="text-xs px-3 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 font-semibold flex items-center gap-1.5 transition">
+                        <i class="ph-bold ph-download-simple"></i> Exportar CSV
+                    </button>
+                </div>
+
+                <div class="overflow-x-auto flex-1 max-h-72 overflow-y-auto rounded-xl border border-slate-800 bg-slate-950">
+                    <table class="w-full text-left border-collapse">
+                        <thead class="bg-slate-900/90 text-[11px] uppercase tracking-wider text-slate-400 sticky top-0">
+                            <tr>
+                                <th class="py-3 px-4 font-bold"># Vuelta</th>
+                                <th class="py-3 px-4 font-bold text-cyan-400">Sector 1</th>
+                                <th class="py-3 px-4 font-bold text-purple-400">Sector 2</th>
+                                <th class="py-3 px-4 font-bold text-emerald-400">Meta (S3)</th>
+                                <th class="py-3 px-4 font-bold text-right text-white">Tiempo Total</th>
+                                <th class="py-3 px-4 font-bold text-right">Dif.</th>
+                            </tr>
+                        </thead>
+                        <tbody id="lapsTableBody" class="divide-y divide-slate-800/70 text-sm font-mono-timer">
+                            <tr>
+                                <td colspan="6" class="py-10 text-center text-slate-500 font-sans">
+                                    Aún no hay vueltas registradas. Pasa un coche por los sensores o usa los botones del simulador.
+                                </td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+
+            <!-- CONSOLA SERIAL USB EN VIVO (5 cols) -->
+            <div class="lg:col-span-5 bg-slate-900 border border-slate-800 rounded-2xl p-5 flex flex-col shadow-xl">
+                <div class="flex items-center justify-between mb-3">
+                    <h3 class="text-sm font-bold uppercase tracking-wider text-slate-300 flex items-center gap-2">
+                        <i class="ph-bold ph-terminal-window text-emerald-400 text-lg"></i>
+                        Monitor Serie USB (115200 baudios)
+                    </h3>
+                    <div class="flex items-center gap-2">
+                        <label class="text-xs text-slate-400 flex items-center gap-1.5 cursor-pointer select-none">
+                            <input type="checkbox" id="chkHideHeartbeat" class="rounded bg-slate-800 border-slate-700 text-amber-500 focus:ring-0">
+                            Ocultar latido (PINS)
+                        </label>
+                        <button onclick="clearSerialLog()" class="text-xs px-2 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-400 hover:text-white transition" title="Limpiar consola">
+                            Limpiar
+                        </button>
+                    </div>
+                </div>
+
+                <!-- Ventana de log -->
+                <div id="serialConsole" class="flex-1 h-56 max-h-56 overflow-y-auto bg-slate-950 border border-slate-800 rounded-xl p-3 font-mono text-xs space-y-1.5 mb-3">
+                    <div class="text-slate-500">[SISTEMA] Consola KRONOS lista. Conecta tu Arduino UNO / Elegoo R3 mediante USB o usa el simulador.</div>
+                </div>
+
+                <!-- Envío manual de comandos -->
+                <form onsubmit="handleManualSerialSend(event)" class="flex gap-2">
+                    <input type="text" id="manualCmdInput" placeholder="Enviar comando (ej: PING, TEST, CAL)..." class="flex-1 bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xs font-mono text-white placeholder-slate-500 focus:outline-none focus:border-amber-500">
+                    <button type="submit" class="px-4 py-2 rounded-xl bg-amber-500 hover:bg-amber-400 text-black font-bold text-xs transition">
+                        Enviar
+                    </button>
+                </form>
+            </div>
+
+        </div>
+    </main>
+
+    <!-- FOOTER -->
+    <footer class="border-t border-slate-800/80 bg-slate-950 py-3 px-6 text-center text-xs text-slate-500">
+        Compatible con el protocolo <span class="text-slate-400 font-mono">KRONOS SLOT PRO - DRIVER INFRARROJOS (IR) v4</span> • Usa Google Chrome, Edge u Opera para conexión directa por cable USB (Web Serial API).
+    </footer>
+
+    <script>
+        // ==========================================
+        // ESTADO GLOBAL DE LA APLICACIÓN Y TELEMETRÍA
+        // ==========================================
+        let port = null;
+        let reader = null;
+        let writer = null;
+        let isConnected = false;
+        let readLoopActive = false;
+        let serialBuffer = "";
+
+        // Estado de Audio (Web Audio API para pitidos de carrera sin archivos externos)
+        let audioEnabled = true;
+        let audioCtx = null;
+
+        // Estado de tiempos en milisegundos
+        let currentS1 = null;
+        let currentS2 = null;
+        let currentS3 = null;
+
+        let bestS1 = null;
+        let bestS2 = null;
+        let bestS3 = null;
+        let bestLapTime = null;
+        let bestLapNumber = null;
+
+        let laps = []; // Array de objetos { lapNumber, s1, s2, s3, total }
+
+        // Simulador
+        let lastSimTimestamp = 0;
+        let autoSimTimeouts = [];
+        let isAutoSimRunning = false;
+
+        // ==========================================
+        // SONIDOS SINTETIZADOS (BEEP DE CRONO)
+        // ==========================================
+        function playBeep(freq = 880, duration = 0.08, type = 'sine') {
+            if (!audioEnabled) return;
+            try {
+                if (!audioCtx) {
+                    audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+                }
+                if (audioCtx.state === 'suspended') {
+                    audioCtx.resume();
+                }
+                const osc = audioCtx.createOscillator();
+                const gain = audioCtx.createGain();
+                osc.type = type;
+                osc.frequency.setValueAtTime(freq, audioCtx.currentTime);
+                gain.gain.setValueAtTime(0.15, audioCtx.currentTime);
+                gain.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + duration);
+
+                osc.connect(gain);
+                gain.connect(audioCtx.destination);
+                osc.start();
+                osc.stop(audioCtx.currentTime + duration);
+            } catch (e) {
+                // Ignorar si el navegador bloquea audio antes de interacción
+            }
+        }
+
+        function toggleAudio() {
+            audioEnabled = !audioEnabled;
+            const icon = document.getElementById('iconAudio');
+            if (audioEnabled) {
+                icon.className = "ph-fill ph-speaker-high text-lg text-amber-400";
+                playBeep(880, 0.07);
+            } else {
+                icon.className = "ph-fill ph-speaker-slash text-lg text-slate-500";
+            }
+        }
+
+        // ==========================================
+        // CONEXIÓN USB REAL (WEB SERIAL API)
+        // ==========================================
+        async function toggleSerialConnection() {
+            if (isConnected) {
+                await disconnectSerial();
+            } else {
+                await connectSerial();
+            }
+        }
+
+        async function connectSerial() {
+            if (!('serial' in navigator)) {
+                showBanner("Tu navegador no soporta conexión USB directa (Web Serial API). Abre esta aplicación en Google Chrome o Microsoft Edge en tu ordenador, o utiliza el Modo Simulador incluido abajo.");
+                return;
+            }
+
+            try {
+                // Pedir al usuario que elija el puerto COM de su Arduino
+                port = await navigator.serial.requestPort();
+                // Tu código de Arduino usa Serial.begin(115200)
+                await port.open({ baudRate: 115200 });
+
+                isConnected = true;
+                readLoopActive = true;
+                updateConnectionUI(true);
+                logToConsole("Conectado al puerto USB a 115200 baudios.", "SYSTEM");
+
+                // Preparar canal de escritura para enviar PING, TEST o CAL
+                const textEncoder = new TextEncoderStream();
+                const writableStreamClosed = textEncoder.readable.pipeTo(port.writable);
+                writer = textEncoder.writable.getWriter();
+
+                // Iniciar bucle de lectura continua
+                readSerialLoop();
+
+            } catch (err) {
+                logToConsole("No se pudo abrir el puerto USB: " + err.message, "ERROR");
+                showBanner("No se pudo conectar al puerto USB (" + err.message + "). Si estás dentro de una vista previa restringida, descarga este archivo HTML y ábrelo en Chrome, o prueba el Simulador.");
+            }
+        }
+
+        async function disconnectSerial() {
+            readLoopActive = false;
+            try {
+                if (reader) {
+                    await reader.cancel();
+                    reader = null;
+                }
+                if (writer) {
+                    await writer.close();
+                    writer = null;
+                }
+                if (port) {
+                    await port.close();
+                    port = null;
+                }
+            } catch (e) {
+                console.warn("Error cerrando puerto:", e);
+            }
+            isConnected = false;
+            updateConnectionUI(false);
+            logToConsole("Puerto USB desconectado.", "SYSTEM");
+        }
+
+        async function readSerialLoop() {
+            while (port && port.readable && readLoopActive) {
+                const textDecoder = new TextDecoderStream();
+                const readableStreamClosed = port.readable.pipeTo(textDecoder.writable);
+                reader = textDecoder.readable.getReader();
+
+                try {
+                    while (true) {
+                        const { value, done } = await reader.read();
+                        if (done) break;
+                        if (value) {
+                            serialBuffer += value;
+                            let lines = serialBuffer.split(/\r?\n/);
+                            serialBuffer = lines.pop(); // Guardar fragmento incompleto
+                            for (const line of lines) {
+                                const cleanLine = line.trim();
+                                if (cleanLine.length > 0) {
+                                    processArduinoMessage(cleanLine);
+                                }
+                            }
+                        }
+                    }
+                } catch (err) {
+                    logToConsole("Error de lectura USB: " + err.message, "ERROR");
+                } finally {
+                    if (reader) {
+                        reader.releaseLock();
+                    }
+                }
+            }
+        }
+
+        // ==========================================
+        // INTÉRPRETE DEL PROTOCOLO KRONOS IR v4
+        // ==========================================
+        function processArduinoMessage(rawLine) {
+            const hidePins = document.getElementById('chkHideHeartbeat').checked;
+            if (!rawLine.startsWith("PINS,") || !hidePins) {
+                logToConsole(rawLine, "RX");
+            }
+
+            const parts = rawLine.split(',');
+            const header = parts[0];
+
+            // 1. Mensajes de estado eléctrico: PINS,1,1,1
+            if (header === "PINS" && parts.length >= 4) {
+                const s1State = parseInt(parts[1], 10);
+                const s2State = parseInt(parts[2], 10);
+                const metaState = parseInt(parts[3], 10);
+                updatePinsUI(s1State, s2State, metaState);
+                return;
+            }
+
+            // 2. Mensajes de diagnóstico: INFO,SENSORES_IR_AUTOCALIBRADOS_OK | INFO,PONG_ARDUINO_VIVO | INFO,RECALIBRADO_OK
+            if (header === "INFO") {
+                const infoMsg = parts.slice(1).join(',');
+                document.getElementById('currentStageStatus').innerHTML = `<span class="text-emerald-400">Arduino: ${infoMsg}</span>`;
+                playBeep(1046, 0.08, 'triangle');
+                return;
+            }
+
+            // 3. Paso por SECTOR 1: S1,L1,split,0
+            if (header === "S1" && parts.length >= 3) {
+                const splitMs = parseInt(parts[2], 10);
+                handleSector1Pass(splitMs);
+                return;
+            }
+
+            // 4. Paso por SECTOR 2: S2,L1,split,0
+            if (header === "S2" && parts.length >= 3) {
+                const splitMs = parseInt(parts[2], 10);
+                handleSector2Pass(splitMs);
+                return;
+            }
+
+            // 5. Paso por META (Sector 3): M,L1,split,0
+            if (header === "M" && parts.length >= 3) {
+                const splitMs = parseInt(parts[2], 10);
+                handleMetaPass(splitMs);
+                return;
+            }
+        }
+
+        // ==========================================
+        // LÓGICA DE TIEMPOS Y CÁLCULO DE VUELTAS
+        // ==========================================
+        function formatSeconds(ms) {
+            if (ms === null || isNaN(ms)) return "--.---";
+            return (ms / 1000).toFixed(3);
+        }
+
+        function triggerCardFlash(cardId) {
+            const el = document.getElementById(cardId);
+            el.classList.remove('sector-flash');
+            void el.offsetWidth; // reflow
+            el.classList.add('sector-flash');
+        }
+
+        function handleSector1Pass(splitMs) {
+            playBeep(660, 0.08, 'sine');
+            currentS1 = splitMs;
+            // Si empezamos nueva vuelta en S1, limpiamos S2 y S3 visuales de la vuelta en curso
+            currentS2 = null;
+            currentS3 = null;
+
+            const isBest = (bestS1 === null || splitMs < bestS1);
+            if (isBest) bestS1 = splitMs;
+
+            // Actualizar UI Sector 1
+            document.getElementById('timeS1').innerHTML = `${formatSeconds(splitMs)}<span class="text-sm text-slate-500">s</span>`;
+            document.getElementById('bestS1').textContent = `${formatSeconds(bestS1)}s`;
+            document.getElementById('timeS2').innerHTML = `--.---<span class="text-sm text-slate-500">s</span>`;
+            document.getElementById('timeS3').innerHTML = `--.---<span class="text-sm text-slate-500">s</span>`;
+
+            const card1 = document.getElementById('cardSector1');
+            card1.className = `bg-slate-950 border-2 ${isBest ? 'border-purple-500' : 'border-cyan-500'} rounded-2xl p-4 transition-all`;
+            document.getElementById('cardSector2').className = "bg-slate-950 border-2 border-slate-800 rounded-2xl p-4 transition-all";
+            document.getElementById('cardSector3').className = "bg-slate-950 border-2 border-slate-800 rounded-2xl p-4 transition-all";
+            triggerCardFlash('cardSector1');
+
+            // Actualizar acumulado provisional
+            document.getElementById('mainLapTimer').innerHTML = `${formatSeconds(currentS1)}<span class="text-xl text-slate-500 font-normal">s</span>`;
+            document.getElementById('lastRawSplitInfo').textContent = `S1: ${splitMs} ms`;
+            document.getElementById('currentStageStatus').innerHTML = `<span class="text-cyan-400">En tramo • Rumbo al Sector 2...</span>`;
+            updateTheoreticalBest();
+        }
+
+        function handleSector2Pass(splitMs) {
+            playBeep(880, 0.08, 'sine');
+            currentS2 = splitMs;
+
+            const isBest = (bestS2 === null || splitMs < bestS2);
+            if (isBest) bestS2 = splitMs;
+
+            document.getElementById('timeS2').innerHTML = `${formatSeconds(splitMs)}<span class="text-sm text-slate-500">s</span>`;
+            document.getElementById('bestS2').textContent = `${formatSeconds(bestS2)}s`;
+
+            const card2 = document.getElementById('cardSector2');
+            card2.className = `bg-slate-950 border-2 ${isBest ? 'border-purple-500' : 'border-purple-400'} rounded-2xl p-4 transition-all`;
+            triggerCardFlash('cardSector2');
+
+            const partialSum = (currentS1 || 0) + currentS2;
+            document.getElementById('mainLapTimer').innerHTML = `${formatSeconds(partialSum)}<span class="text-xl text-slate-500 font-normal">s</span>`;
+            document.getElementById('lastRawSplitInfo').textContent = `S2: ${splitMs} ms`;
+            document.getElementById('currentStageStatus').innerHTML = `<span class="text-purple-400">Sector 2 completado • Rumbo a META...</span>`;
+            updateTheoreticalBest();
+        }
+
+        function handleMetaPass(splitMs) {
+            currentS3 = splitMs;
+
+            const isBestS3 = (bestS3 === null || splitMs < bestS3);
+            if (isBestS3) bestS3 = splitMs;
+
+            document.getElementById('timeS3').innerHTML = `${formatSeconds(splitMs)}<span class="text-sm text-slate-500">s</span>`;
+            document.getElementById('bestS3').textContent = `${formatSeconds(bestS3)}s`;
+
+            const card3 = document.getElementById('cardSector3');
+            card3.className = `bg-slate-950 border-2 ${isBestS3 ? 'border-purple-500' : 'border-emerald-500'} rounded-2xl p-4 transition-all`;
+            triggerCardFlash('cardSector3');
+
+            // Calcular tiempo total de vuelta (si faltó algún sensor por salto de carril, suma los disponibles)
+            const totalLapMs = (currentS1 || 0) + (currentS2 || 0) + currentS3;
+            const lapNumber = laps.length + 1;
+
+            // Comprobar récord de vuelta
+            const prevBestLap = bestLapTime;
+            const isNewLapRecord = (bestLapTime === null || totalLapMs < bestLapTime);
+
+            if (isNewLapRecord) {
+                bestLapTime = totalLapMs;
+                bestLapNumber = lapNumber;
+                playBeep(1174, 0.12, 'triangle');
+                setTimeout(() => playBeep(1567, 0.18, 'triangle'), 110);
+            } else {
+                playBeep(1046, 0.15, 'sine');
+            }
+
+            // Calcular diferencia respecto al récord anterior
+            let deltaMs = null;
+            const deltaBadge = document.getElementById('lapDeltaBadge');
+            if (prevBestLap === null) {
+                deltaBadge.textContent = "1ª VUELTA";
+                deltaBadge.className = "text-xs font-mono-timer px-2 py-0.5 rounded bg-blue-950 text-blue-300 border border-blue-800";
+            } else {
+                deltaMs = totalLapMs - prevBestLap;
+                if (deltaMs <= 0) {
+                    deltaBadge.textContent = `${(deltaMs / 1000).toFixed(3)}s (RÉCORD)`;
+                    deltaBadge.className = "text-xs font-mono-timer px-2 py-0.5 rounded bg-purple-950 text-purple-300 border border-purple-700";
+                } else {
+                    deltaBadge.textContent = `+${(deltaMs / 1000).toFixed(3)}s`;
+                    deltaBadge.className = "text-xs font-mono-timer px-2 py-0.5 rounded bg-amber-950 text-amber-300 border border-amber-800";
+                }
+            }
+
+            // Actualizar Marcador Principal
+            document.getElementById('mainLapTimer').innerHTML = `${formatSeconds(totalLapMs)}<span class="text-xl text-slate-500 font-normal">s</span>`;
+            document.getElementById('lastRawSplitInfo').textContent = `Meta: ${splitMs} ms`;
+            document.getElementById('lapCountDisplay').textContent = lapNumber;
+
+            document.getElementById('bestLapTimer').innerHTML = `${formatSeconds(bestLapTime)}<span class="text-xl text-purple-500/70 font-normal">s</span>`;
+            document.getElementById('bestLapNumBadge').textContent = `Vuelta #${bestLapNumber}`;
+            document.getElementById('currentStageStatus').innerHTML = `<span class="text-emerald-400">¡Vuelta #${lapNumber} completada en ${formatSeconds(totalLapMs)}s!</span>`;
+
+            // Guardar en el historial
+            laps.unshift({
+                lapNumber,
+                s1: currentS1,
+                s2: currentS2,
+                s3: currentS3,
+                total: totalLapMs,
+                delta: deltaMs,
+                isRecord: isNewLapRecord
+            });
+
+            renderLapsTable();
+            updateTheoreticalBest();
+        }
+
+        function updateTheoreticalBest() {
+            if (bestS1 !== null && bestS2 !== null && bestS3 !== null) {
+                const ideal = bestS1 + bestS2 + bestS3;
+                document.getElementById('theoreticalBestDisplay').textContent = `${formatSeconds(ideal)}s`;
+            }
+        }
+
+        function renderLapsTable() {
+            const tbody = document.getElementById('lapsTableBody');
+            if (laps.length === 0) {
+                tbody.innerHTML = `
+                    <tr>
+                        <td colspan="6" class="py-10 text-center text-slate-500 font-sans">
+                            Aún no hay vueltas registradas. Pasa un coche por los sensores o usa los botones del simulador.
+                        </td>
+                    </tr>`;
+                return;
+            }
+
+            tbody.innerHTML = laps.map(lap => {
+                const isOverallBest = (lap.total === bestLapTime);
+                const s1Class = (lap.s1 !== null && lap.s1 === bestS1) ? "text-purple-400 font-bold" : "text-slate-300";
+                const s2Class = (lap.s2 !== null && lap.s2 === bestS2) ? "text-purple-400 font-bold" : "text-slate-300";
+                const s3Class = (lap.s3 !== null && lap.s3 === bestS3) ? "text-purple-400 font-bold" : "text-slate-300";
+
+                let diffStr = "--";
+                let diffColor = "text-slate-500";
+                if (bestLapTime !== null) {
+                    const diff = lap.total - bestLapTime;
+                    if (diff === 0) {
+                        diffStr = "BEST";
+                        diffColor = "text-purple-400 font-bold";
+                    } else {
+                        diffStr = `+${formatSeconds(diff)}s`;
+                        diffColor = "text-amber-400";
+                    }
+                }
+
+                return `
+                    <tr class="hover:bg-slate-900/60 transition ${isOverallBest ? 'bg-purple-950/20' : ''}">
+                        <td class="py-2.5 px-4 font-bold text-slate-300">#${lap.lapNumber}</td>
+                        <td class="py-2.5 px-4 ${s1Class}">${lap.s1 ? formatSeconds(lap.s1) + 's' : '--'}</td>
+                        <td class="py-2.5 px-4 ${s2Class}">${lap.s2 ? formatSeconds(lap.s2) + 's' : '--'}</td>
+                        <td class="py-2.5 px-4 ${s3Class}">${lap.s3 ? formatSeconds(lap.s3) + 's' : '--'}</td>
+                        <td class="py-2.5 px-4 text-right font-extrabold ${isOverallBest ? 'text-purple-300' : 'text-white'}">${formatSeconds(lap.total)}s</td>
+                        <td class="py-2.5 px-4 text-right text-xs ${diffColor}">${diffStr}</td>
+                    </tr>
+                `;
+            }).join('');
+        }
+
+        // ==========================================
+        // ACTUALIZACIÓN VISUAL DE PINES E INTERFAZ
+        // ==========================================
+        function updatePinsUI(s1, s2, meta) {
+            const nowStr = new Date().toLocaleTimeString();
+            document.getElementById('lastHeartbeatTime').textContent = `Latido: ${nowStr}`;
+
+            updateSinglePinUI('S1', s1, 'cyan');
+            updateSinglePinUI('S2', s2, 'purple');
+            updateSinglePinUI('Meta', meta, 'emerald');
+        }
+
+        function updateSinglePinUI(idSuffix, val, colorName) {
+            const light = document.getElementById(`pinLight${idSuffix}`);
+            const text = document.getElementById(`pinVal${idSuffix}`);
+            text.textContent = val === 1 ? "HIGH (1)" : "LOW (0)";
+
+            // En sensores IR con INPUT_PULLUP, normalmente LOW (0) es haz cortado o activo, pero mostramos ambos claramente
+            if (val === 0) {
+                light.className = `w-4 h-4 rounded-full bg-amber-400 my-2.5 shadow-lg shadow-amber-400/50 scale-110 transition-all`;
+                text.className = `font-mono-timer text-xs px-2 py-0.5 rounded bg-amber-500/20 text-amber-300 border border-amber-500/40 font-bold`;
+            } else {
+                light.className = `w-4 h-4 rounded-full bg-emerald-500 my-2.5 shadow-md shadow-emerald-500/30 transition-all`;
+                text.className = `font-mono-timer text-xs px-2 py-0.5 rounded bg-slate-900 text-emerald-400 border border-slate-800`;
+            }
+        }
+
+        function updateConnectionUI(connected) {
+            const dot = document.getElementById('statusDot');
+            const text = document.getElementById('statusText');
+            const btn = document.getElementById('btnConnect');
+            const btnText = document.getElementById('btnConnectText');
+
+            if (connected) {
+                dot.className = "w-2.5 h-2.5 rounded-full bg-emerald-400 animate-pulse";
+                text.textContent = "Arduino Conectado";
+                text.className = "font-semibold text-emerald-400";
+                btn.className = "flex items-center gap-2 px-4 py-2 rounded-xl font-bold text-sm bg-red-600 hover:bg-red-500 text-white shadow-lg shadow-red-600/20 transition cursor-pointer";
+                btnText.textContent = "Desconectar USB";
+            } else {
+                dot.className = "w-2.5 h-2.5 rounded-full bg-red-500";
+                text.textContent = "Desconectado";
+                text.className = "font-semibold text-slate-300";
+                btn.className = "flex items-center gap-2 px-4 py-2 rounded-xl font-bold text-sm bg-emerald-600 hover:bg-emerald-500 text-white shadow-lg shadow-emerald-600/20 transition cursor-pointer";
+                btnText.textContent = "Conectar Arduino USB";
+            }
+        }
+
+        // ==========================================
+        // ENVÍO DE COMANDOS AL ARDUINO (PING / CAL)
+        // ==========================================
+        async function sendCommand(cmd) {
+            const cleanCmd = cmd.trim().toUpperCase();
+            if (!cleanCmd) return;
+
+            logToConsole(cleanCmd, "TX");
+
+            if (isConnected && writer) {
+                try {
+                    await writer.write(cleanCmd + "\n");
+                } catch (e) {
+                    logToConsole("Error al enviar comando: " + e.message, "ERROR");
+                }
+            } else {
+                // Si no está conectado por USB, simulamos la respuesta exacta de tu código de Arduino
+                setTimeout(() => {
+                    if (cleanCmd === "PING" || cleanCmd === "TEST") {
+                        processArduinoMessage("INFO,PONG_ARDUINO_VIVO");
+                        processArduinoMessage("PINS,1,1,1");
+                    } else if (cleanCmd === "CAL") {
+                        processArduinoMessage("INFO,RECALIBRADO_OK");
+                        processArduinoMessage("PINS,1,1,1");
+                    }
+                }, 120);
+            }
+        }
+
+        function handleManualSerialSend(e) {
+            e.preventDefault();
+            const input = document.getElementById('manualCmdInput');
+            if (input.value.trim() !== "") {
+                sendCommand(input.value);
+                input.value = "";
+            }
+        }
+
+        // ==========================================
+        // SIMULADOR INTEGRADO (PRUEBAS SIN ARDUINO)
+        // ==========================================
+        function simulatePass(sensorCode) {
+            const now = performance.now();
+            let split = 1200; // Igual que tu código Arduino cuando lastTimeTotal == 0
+            if (lastSimTimestamp > 0) {
+                split = Math.round(now - lastSimTimestamp);
+                // Si el usuario tardó más de 15 segundos en pulsar, generamos un split realista de slot (entre 1.4s y 2.6s)
+                if (split > 15000 || split < 250) {
+                    split = Math.floor(1450 + Math.random() * 950);
+                }
+            }
+            lastSimTimestamp = now;
+
+            // Simular fogonazo del pin a 0 y regreso a 1
+            if (sensorCode === 'S1') updatePinsUI(0, 1, 1);
+            if (sensorCode === 'S2') updatePinsUI(1, 0, 1);
+            if (sensorCode === 'M') updatePinsUI(1, 1, 0);
+
+            processArduinoMessage(`${sensorCode},L1,${split},0`);
+            setTimeout(() => {
+                processArduinoMessage("PINS,1,1,1");
+            }, 180);
+        }
+
+        function toggleAutoRallySim() {
+            const btn = document.getElementById('btnAutoSim');
+            if (isAutoSimRunning) {
+                autoSimTimeouts.forEach(t => clearTimeout(t));
+                autoSimTimeouts = [];
+                isAutoSimRunning = false;
+                btn.textContent = "▶ Simular Vuelta Auto";
+                btn.className = "text-[11px] px-2.5 py-1 rounded-lg bg-amber-500/20 hover:bg-amber-500/30 text-amber-300 border border-amber-500/30 font-semibold transition";
+                return;
+            }
+
+            isAutoSimRunning = true;
+            btn.textContent = "⏹ Simulando...";
+            btn.className = "text-[11px] px-2.5 py-1 rounded-lg bg-red-500/20 text-red-300 border border-red-500/40 font-semibold transition";
+
+            const s1Time = Math.floor(1650 + Math.random() * 450);
+            const s2Time = Math.floor(2100 + Math.random() * 500);
+            const s3Time = Math.floor(1400 + Math.random() * 400);
+
+            // Paso por S1
+            autoSimTimeouts.push(setTimeout(() => {
+                processArduinoMessage(`S1,L1,${s1Time},0`);
+                processArduinoMessage(`PINS,1,1,1`);
+            }, 400));
+
+            // Paso por S2
+            autoSimTimeouts.push(setTimeout(() => {
+                processArduinoMessage(`S2,L1,${s2Time},0`);
+                processArduinoMessage(`PINS,1,1,1`);
+            }, 400 + 1100));
+
+            // Paso por META
+            autoSimTimeouts.push(setTimeout(() => {
+                processArduinoMessage(`M,L1,${s3Time},0`);
+                processArduinoMessage(`PINS,1,1,1`);
+                isAutoSimRunning = false;
+                btn.textContent = "▶ Simular Vuelta Auto";
+                btn.className = "text-[11px] px-2.5 py-1 rounded-lg bg-amber-500/20 hover:bg-amber-500/30 text-amber-300 border border-amber-500/30 font-semibold transition";
+            }, 400 + 2200));
+        }
+
+        // ==========================================
+        // UTILIDADES (CONSOLA, RESET Y EXPORTAR CSV)
+        // ==========================================
+        function logToConsole(msg, type = "RX") {
+            const consoleEl = document.getElementById('serialConsole');
+            const time = new Date().toLocaleTimeString();
+            const line = document.createElement('div');
+
+            if (type === "RX") {
+                line.innerHTML = `<span class="text-slate-600">[${time}]</span> <span class="text-emerald-400 font-bold">RX &lt;</span> <span class="text-slate-200">${msg}</span>`;
+            } else if (type === "TX") {
+                line.innerHTML = `<span class="text-slate-600">[${time}]</span> <span class="text-amber-400 font-bold">TX &gt;</span> <span class="text-amber-200">${msg}</span>`;
+            } else if (type === "ERROR") {
+                line.innerHTML = `<span class="text-slate-600">[${time}]</span> <span class="text-red-400 font-bold">ERR !</span> <span class="text-red-300">${msg}</span>`;
+            } else {
+                line.innerHTML = `<span class="text-slate-600">[${time}]</span> <span class="text-cyan-400 font-bold">SYS •</span> <span class="text-slate-400">${msg}</span>`;
+            }
+
+            consoleEl.appendChild(line);
+            consoleEl.scrollTop = consoleEl.scrollHeight;
+        }
+
+        function clearSerialLog() {
+            document.getElementById('serialConsole').innerHTML = "";
+        }
+
+        function resetTelemetry() {
+            currentS1 = null;
+            currentS2 = null;
+            currentS3 = null;
+            bestS1 = null;
+            bestS2 = null;
+            bestS3 = null;
+            bestLapTime = null;
+            bestLapNumber = null;
+            laps = [];
+            lastSimTimestamp = 0;
+
+            document.getElementById('mainLapTimer').innerHTML = `0.000<span class="text-xl text-slate-500 font-normal">s</span>`;
+            document.getElementById('bestLapTimer').innerHTML = `--.---<span class="text-xl text-purple-500/70 font-normal">s</span>`;
+            document.getElementById('theoreticalBestDisplay').textContent = `--.---s`;
+            document.getElementById('lapCountDisplay').textContent = "0";
+            document.getElementById('bestLapNumBadge').textContent = "Sin récord";
+            document.getElementById('lapDeltaBadge').textContent = "--";
+            document.getElementById('lastRawSplitInfo').textContent = "Último sensor: --";
+            document.getElementById('currentStageStatus').textContent = "Sesión reiniciada. Esperando paso por sensor...";
+
+            ['S1', 'S2', 'S3'].forEach(s => {
+                document.getElementById(`time${s}`).innerHTML = `--.---<span class="text-sm text-slate-500">s</span>`;
+                document.getElementById(`best${s}`).textContent = `--.---s`;
+            });
+
+            renderLapsTable();
+            logToConsole("Tabla de tiempos reiniciada.", "SYSTEM");
+        }
+
+        function exportCSV() {
+            if (laps.length === 0) {
+                showBanner("Aún no hay vueltas registradas para exportar.");
+                return;
+            }
+            let csv = "Vuelta,Sector1_ms,Sector2_ms,Meta_S3_ms,Total_ms,Total_Segundos\n";
+            [...laps].reverse().forEach(l => {
+                csv += `${l.lapNumber},${l.s1 || ''},${l.s2 || ''},${l.s3 || ''},${l.total},${formatSeconds(l.total)}\n`;
+            });
+            const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = `kronos_slot_tiempos_${new Date().toISOString().slice(0,10)}.csv`;
+            a.click();
+        }
+
+        function showBanner(msg) {
+            const banner = document.getElementById('alertBanner');
+            document.getElementById('alertBannerText').textContent = msg;
+            banner.classList.remove('hidden');
+        }
+
+        function hideBanner() {
+            document.getElementById('alertBanner').classList.add('hidden');
+        }
+    </script>
+</body>
+</html>
